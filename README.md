@@ -53,7 +53,7 @@ Gradle:
 
 ```gradle
 dependencies {
-    testImplementation 'io.github.dm9tr0:openapi-coverage-report:0.1.0'
+    testImplementation 'io.github.dm9tr0:openapi-coverage-report:0.2.0'
 }
 ```
 
@@ -63,7 +63,7 @@ Maven:
 <dependency>
   <groupId>io.github.dm9tr0</groupId>
   <artifactId>openapi-coverage-report</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
@@ -95,29 +95,73 @@ RestAssured.filters(new OpenApiCoverageFilter(Path.of("build/coverage-output")))
 
 Run your test suite as usual — one `*-coverage.json` file is written per request.
 
-### 2. Generate the report
+### 2. Generate the report in your project
 
-```bash
-./gradlew coverageReport -PreportArgs="\
-  https://api.example.com/v3/api-docs \
-  src/test/resources/openapi.json \
-  build/coverage-output \
-  build/reports"
+The report generator is a `main` class (`coverage.OpenApiCoverageReporter`) —
+there is no Gradle plugin, so wire a `JavaExec` task into your own
+`build.gradle`:
+
+```gradle
+// SLF4J binding for the reporter's console logs only — kept off the
+// published/runtime classpath so it never clashes with your logging setup.
+configurations { coverageLogging }
+dependencies { coverageLogging "org.slf4j:slf4j-simple:2.0.18" }
+
+tasks.register("coverageReport", JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath + configurations.coverageLogging
+    mainClass = "coverage.OpenApiCoverageReporter"
+    args(
+        "https://api.example.com/v3/api-docs",  // spec URL or local file
+        "",                                      // fallback spec path ("" = none)
+        "build/coverage-output",                 // recorded *-coverage.json dir
+        "build/reports",                         // output dir
+        // optional flags:
+        "--min-coverage", "70",                  // exit 2 if coverage < 70%
+        "--config", "openapi-coverage.conf")     // ignore/filter rules
+}
 ```
 
-Arguments (positional):
+Run it after your tests:
 
-| # | Arg | Meaning |
-|---|-----|---------|
-| 1 | `specUrlOrFile` | OpenAPI document — an `http(s)` URL **or** a local file path |
-| 2 | `fallbackSpecPath` | Local spec used if the first can't be loaded (offline/CI) |
-| 3 | `coverageOutputDir` | Directory of recorded `*-coverage.json` files |
-| 4 | `outputDir` *(optional)* | Where to write `coverage-report.html` (default `build/reports`) |
+```bash
+./gradlew test coverageReport
+```
 
-The report is written to `<outputDir>/coverage-report.html`.
+Arguments — positional first, then optional flags (anywhere):
 
-You can also run the entry point directly:
-`coverage.OpenApiCoverageReporter <specUrlOrFile> <fallbackSpecPath> <coverageOutputDir> [outputDir]`.
+| Arg | Meaning |
+|-----|---------|
+| `specUrlOrFile` | OpenAPI document — an `http(s)` URL **or** a local file path |
+| `fallbackSpecPath` | Local spec used if the first can't be loaded (`""` for none) |
+| `coverageOutputDir` | Directory of recorded `*-coverage.json` files |
+| `outputDir` *(optional)* | Where reports are written (default `build/reports`) |
+| `--min-coverage <N>` *(optional)* | Exit code **2** if coverage % is below N (CI gate) |
+| `--config <path>` *(optional)* | Path to a config file (see below) |
+
+Outputs written to `<outputDir>`:
+
+- `coverage-report.html` — the interactive report
+- `coverage-report.json` — machine-readable result for CI (metrics, gating)
+
+### 3. Optional config (`openapi-coverage.conf`)
+
+A flat `key = value` file (no JSON). It only ever *removes* things from the
+coverage denominator — with no config the tool runs with sensible defaults:
+
+```
+# one setting per line; '#' starts a comment, blank lines are ignored
+ignore-deprecated = true
+ignore-status = 500
+ignore-status = 503
+ignore-operation = POST /internal/.*
+ignore-operation = /admin/.*
+```
+
+| Key | Effect |
+|-----|--------|
+| `ignore-deprecated` | `true`/`false` — drop deprecated operations from coverage |
+| `ignore-status` | a status code (repeat for several) — stops counting as a condition |
+| `ignore-operation` | `[METHOD] <path-regex>` — drop matching operations (method optional) |
 
 ## What the report shows
 

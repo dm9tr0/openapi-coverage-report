@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
@@ -30,21 +31,52 @@ public final class OpenApiCoverageReporter {
     /**
      * Entry point for the report generator when invoked via JavaExec.
      *
-     * @param args specUrl fallbackSpecPath coverageOutputDir [outputDir]
+     * <p>Positional: {@code <specUrl> <fallbackSpecPath> <coverageOutputDir>
+     * [outputDir]}. Optional flags (anywhere): {@code --min-coverage <N>}
+     * (exit code 2 if coverage % is below N), {@code --config <path>} (a flat
+     * {@code key = value} config, see {@link CoverageConfig}).
+     *
+     * @param args positional arguments plus optional flags
      */
     public static void main(final String[] args) {
-        if (args.length < 3) {
+        final List<String> positional = new ArrayList<>();
+        double minCoverage = -1;
+        String configPath = null;
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "--min-coverage" -> minCoverage = parseMinCoverage(args, ++i);
+                case "--config" -> configPath = i + 1 < args.length ? args[++i] : null;
+                default -> positional.add(args[i]);
+            }
+        }
+        if (positional.size() < 3) {
             System.err.println("Usage: OpenApiCoverageReporter <specUrl>"
-                + " <fallbackSpecPath> <coverageOutputDir> [outputDir]");
+                + " <fallbackSpecPath> <coverageOutputDir> [outputDir]"
+                + " [--min-coverage <N>] [--config <path>]");
             System.exit(1);
         }
-        final String specUrl = args[0];
-        final String fallbackSpecPath = args[1];
-        final String coverageOutputDir = args[2];
-        final String outputDir = args.length > 3 ? args[3] : "build/reports";
-        new OpenApiCoverageReporter(
-            specUrl, fallbackSpecPath, coverageOutputDir, outputDir
+        final String outputDir = positional.size() > 3
+            ? positional.get(3) : "build/reports";
+        final boolean ok = new OpenApiCoverageReporter(
+            positional.get(0), positional.get(1), positional.get(2),
+            outputDir, minCoverage, configPath
         ).run();
+        if (!ok) {
+            System.exit(2);
+        }
+    }
+
+    private static double parseMinCoverage(final String[] args, final int idx) {
+        if (idx >= args.length) {
+            return -1;
+        }
+        try {
+            return Double.parseDouble(args[idx]);
+        } catch (final NumberFormatException e) {
+            System.err.println("Invalid --min-coverage value: " + args[idx]);
+            System.exit(1);
+            return -1;
+        }
     }
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
@@ -55,9 +87,11 @@ public final class OpenApiCoverageReporter {
     private final String fallbackSpecPath;
     private final String coverageOutputDir;
     private final String outputDir;
+    private final double minCoverage;
+    private final String configPath;
 
     /**
-     * Creates a new coverage reporter.
+     * Creates a reporter with no coverage threshold and no config (defaults).
      *
      * @param specUrl          URL to download the live OpenAPI spec
      * @param fallbackSpecPath path to static spec file for fallback
@@ -69,16 +103,42 @@ public final class OpenApiCoverageReporter {
             final String fallbackSpecPath,
             final String coverageOutputDir,
             final String outputDir) {
+        this(specUrl, fallbackSpecPath, coverageOutputDir, outputDir, -1, null);
+    }
+
+    /**
+     * Creates a new coverage reporter.
+     *
+     * @param specUrl          URL to download the live OpenAPI spec
+     * @param fallbackSpecPath path to static spec file for fallback
+     * @param coverageOutputDir directory with per-request coverage JSON files
+     * @param outputDir        directory for the generated report
+     * @param minCoverage      minimum coverage %; below it {@link #run()}
+     *                         returns false (negative = no threshold)
+     * @param configPath       path to an optional flat config file, or null
+     */
+    public OpenApiCoverageReporter(
+            final String specUrl,
+            final String fallbackSpecPath,
+            final String coverageOutputDir,
+            final String outputDir,
+            final double minCoverage,
+            final String configPath) {
         this.specUrl = specUrl;
         this.fallbackSpecPath = fallbackSpecPath;
         this.coverageOutputDir = coverageOutputDir;
         this.outputDir = outputDir;
+        this.minCoverage = minCoverage;
+        this.configPath = configPath;
     }
 
     /**
      * Runs the full coverage report generation pipeline.
+     *
+     * @return false if the spec could not be loaded, or if a {@code minCoverage}
+     *         threshold was set and coverage fell below it; true otherwise
      */
-    public void run() {
+    public boolean run() {
         log.info("=== OpenAPI Coverage Report ===");
         log.info("Spec URL: {}", specUrl);
         log.info("Fallback: {}", fallbackSpecPath);
@@ -90,7 +150,7 @@ public final class OpenApiCoverageReporter {
         if (specJson == null) {
             log.error("No spec available (live download failed and no fallback). "
                 + "Cannot generate coverage report.");
-            return;
+            return false;
         }
 
         // Step 2: Parse spec
@@ -107,22 +167,35 @@ public final class OpenApiCoverageReporter {
                 + "Report will show 0% coverage.");
         }
 
-        // Step 4: Analyze coverage
+        // Step 4: Analyze coverage (optional config narrows what counts)
+        final CoverageConfig config = CoverageConfig.load(configPath);
         final CoverageComparator comparator
-            = new CoverageComparator(parsedSpec, recordedOps);
+            = new CoverageComparator(parsedSpec, recordedOps, config);
         final CoverageComparator.DetailedCoverageResult result
             = comparator.analyze();
         log.info("Coverage: {}/{} conditions covered ({}%)",
             result.coveredConditions(), result.totalConditions(),
             String.format("%.1f", result.totalCoveredPercent()));
 
-        // Step 5: Generate HTML report
+        // Step 5: Generate HTML + JSON reports
         final String specSource = deriveSpecSource();
-        final HtmlReportGenerator generator = new HtmlReportGenerator(
-            result, parsedSpec.version(), specSource, recordedOps.size());
-        generator.generate(outputDir);
+        new HtmlReportGenerator(
+            result, parsedSpec.version(), specSource, recordedOps.size())
+            .generate(outputDir);
+        new JsonReportGenerator(
+            result, parsedSpec.version(), specSource, recordedOps.size())
+            .generate(outputDir);
 
         log.info("=== Coverage Report Complete ===");
+
+        // Step 6: Enforce optional coverage threshold (CI gate)
+        if (minCoverage >= 0 && result.totalCoveredPercent() < minCoverage) {
+            log.error("Coverage {}% is below the required minimum {}%.",
+                String.format("%.1f", result.totalCoveredPercent()),
+                String.format("%.1f", minCoverage));
+            return false;
+        }
+        return true;
     }
 
     /**

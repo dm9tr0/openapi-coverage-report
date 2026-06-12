@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.dm9tr0'
-version = '0.1.0'
+version = '0.2.0'
 
 repositories {
     mavenCentral()
@@ -105,7 +105,7 @@ mavenPublishing {
     publishToMavenCentral()
     signAllPublications()
 
-    coordinates('io.github.dm9tr0', 'openapi-coverage-report', '0.1.0')
+    coordinates('io.github.dm9tr0', 'openapi-coverage-report', version.toString())
 
     pom {
         name = 'OpenAPI Coverage Report'

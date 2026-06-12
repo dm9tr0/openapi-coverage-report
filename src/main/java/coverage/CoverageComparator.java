@@ -30,13 +30,22 @@ public final class CoverageComparator {
 
     private final OpenApiSpecParser.ApiSpec spec;
     private final List<RecordedOperation> recordedOps;
+    private final CoverageConfig config;
     private final Map<String, List<PatternEntry>> specPathPatterns;
 
     public CoverageComparator(
             final OpenApiSpecParser.ApiSpec spec,
             final List<RecordedOperation> recordedOps) {
+        this(spec, recordedOps, CoverageConfig.empty());
+    }
+
+    public CoverageComparator(
+            final OpenApiSpecParser.ApiSpec spec,
+            final List<RecordedOperation> recordedOps,
+            final CoverageConfig config) {
         this.spec = spec;
         this.recordedOps = recordedOps;
+        this.config = config;
         this.specPathPatterns = buildPatterns(spec.operations());
     }
 
@@ -139,6 +148,9 @@ public final class CoverageComparator {
         int mediaTypeCovered = 0;
 
         for (final OpenApiSpecParser.ApiOperation specOp : spec.operations()) {
+            if (config.ignores(specOp)) {
+                continue;
+            }
             final List<RecordedOperation> hits
                 = grouped.getOrDefault(specOp, Collections.emptyList());
 
@@ -155,6 +167,9 @@ public final class CoverageComparator {
             final List<ConditionResult> conditions = new ArrayList<>();
 
             for (final int definedCode : specOp.statusCodes()) {
+                if (config.ignoresStatus(definedCode)) {
+                    continue;
+                }
                 final boolean covered = seenStatuses.contains(definedCode);
                 conditions.add(new ConditionResult(
                     "Response Status",
