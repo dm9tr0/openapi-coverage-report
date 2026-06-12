@@ -1,10 +1,5 @@
 name: Release
 
-# Publishes to Maven Central when a version tag (e.g. 0.2.0) is pushed.
-# Requires these repository secrets:
-#   MAVEN_CENTRAL_USERNAME / MAVEN_CENTRAL_PASSWORD  — Central Portal user token
-#   SIGNING_IN_MEMORY_KEY                            — ASCII-armored GPG private key
-#   SIGNING_IN_MEMORY_KEY_PASSWORD                   — GPG key passphrase
 on:
   push:
     tags: [ '*.*.*' ]
@@ -17,7 +12,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
       - name: Publish and release to Maven Central
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
