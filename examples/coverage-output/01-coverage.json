@@ -1,0 +1,19 @@
+{
+  "format": "openapi-coverage-v1",
+  "paths": {
+    "/orders": {
+      "get": {
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "value": "open"
+          }
+        ],
+        "responses": {
+          "200": {}
+        }
+      }
+    }
+  }
+}

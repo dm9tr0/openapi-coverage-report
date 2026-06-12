@@ -1,0 +1,64 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Example Store API", "version": "1.0.0" },
+  "tags": [
+    { "name": "Orders" },
+    { "name": "Customers" }
+  ],
+  "paths": {
+    "/orders": {
+      "get": {
+        "tags": ["Orders"],
+        "summary": "List orders",
+        "parameters": [
+          { "name": "status", "in": "query", "required": false,
+            "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "OK" },
+          "400": { "description": "Bad request" }
+        }
+      },
+      "post": {
+        "tags": ["Orders"],
+        "summary": "Create an order",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": {
+          "201": { "description": "Created" },
+          "400": { "description": "Bad request" }
+        }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "tags": ["Orders"],
+        "summary": "Get an order",
+        "responses": {
+          "200": { "description": "OK" },
+          "404": { "description": "Not found" }
+        }
+      },
+      "delete": {
+        "tags": ["Orders"],
+        "summary": "Delete an order",
+        "responses": {
+          "204": { "description": "No content" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/customers/{id}": {
+      "get": {
+        "tags": ["Customers"],
+        "summary": "Get a customer",
+        "responses": {
+          "200": { "description": "OK" },
+          "404": { "description": "Not found" }
+        }
+      }
+    }
+  }
+}

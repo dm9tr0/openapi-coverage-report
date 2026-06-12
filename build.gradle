@@ -1,0 +1,134 @@
+plugins {
+    id 'java-library'
+    id 'com.vanniktech.maven.publish' version '0.36.0'
+}
+
+group = 'io.github.dm9tr0'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+// Compile to Java 21 bytecode using whichever JDK 21+ runs Gradle.
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+ext {
+    jackson = '2.18.3'
+    lombok = '1.18.46'
+    slf4j = '2.0.18'
+    restAssured = '5.5.7'
+}
+
+// Classpath for the standalone `coverageReport` task only. Carries an SLF4J
+// binding (slf4j-simple) so the CLI prints logs — WITHOUT making that binding a
+// dependency of the published library. Consumers bring their own binding.
+configurations {
+    reportConsole { extendsFrom configurations.runtimeClasspath }
+}
+
+dependencies {
+    // Core engine: spec parsing + coverage analysis + HTML report.
+    api "com.fasterxml.jackson.core:jackson-databind:$jackson"
+    api "org.slf4j:slf4j-api:$slf4j"
+
+    compileOnly "org.projectlombok:lombok:$lombok"
+    annotationProcessor "org.projectlombok:lombok:$lombok"
+
+    // REST Assured is only needed by the optional recorder filter
+    // (coverage.restassured.OpenApiCoverageFilter). Projects that use the
+    // filter already have REST Assured on their classpath, so it stays
+    // compileOnly here and is never imposed on consumers of the core engine.
+    compileOnly "io.rest-assured:rest-assured:$restAssured"
+
+    // SLF4J binding ONLY for the standalone report task (see reportConsole) —
+    // deliberately NOT runtimeOnly, so it never leaks into the published POM.
+    reportConsole "org.slf4j:slf4j-simple:$slf4j"
+
+    // Tests.
+    testImplementation platform("org.junit:junit-bom:5.11.3")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testImplementation "org.assertj:assertj-core:3.26.3"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+    useJUnitPlatform()
+}
+
+/*
+ * Generate the HTML coverage report from a spec + recorded coverage files.
+ *
+ * Usage:
+ *   ./gradlew coverageReport -PreportArgs="<specUrlOrFile> <fallbackSpecPath> \
+ *       <coverageOutputDir> [outputDir]"
+ *
+ * The first arg may be an http(s) URL or a local file path to an OpenAPI 3.x
+ * (or Swagger 2.0) document; the second is a local fallback spec used if the
+ * first cannot be loaded. With no -PreportArgs, the bundled example under
+ * examples/ is used so a fresh clone runs out of the box.
+ */
+def exampleArgs = 'examples/openapi.json examples/openapi.json ' +
+    'examples/coverage-output examples/report'
+
+tasks.register('coverageReport', JavaExec) {
+    group = 'verification'
+    description = 'Generate the API coverage HTML report (bundled example).'
+    // reportConsole = main runtime classpath + slf4j-simple (for CLI logs).
+    classpath = configurations.reportConsole + sourceSets.main.output
+    mainClass = 'coverage.OpenApiCoverageReporter'
+    def argLine = (project.findProperty('reportArgs') ?: exampleArgs).toString()
+    args(argLine.split('\\s+'))
+    doFirst {
+        if (!project.hasProperty('reportArgs')) {
+            logger.lifecycle('No -PreportArgs given; generating the bundled ' +
+                'example report. Pass -PreportArgs="<spec> <fallback> ' +
+                '<coverageDir> [outDir]" to run against your own API.')
+        }
+    }
+}
+
+// Sources are annotated with Lombok; keep Javadoc lint from failing the
+// (published) javadoc jar over doc-comment nitpicks.
+tasks.withType(Javadoc).configureEach {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+// Publish to Maven Central via the Sonatype Central Portal.
+// The plugin wires up the java-library publication and the sources/javadoc
+// jars, signs everything (GPG), and uploads through the Portal API.
+// Credentials + signing key live in ~/.gradle/gradle.properties, never here.
+mavenPublishing {
+    publishToMavenCentral()
+    signAllPublications()
+
+    coordinates('io.github.dm9tr0', 'openapi-coverage-report', '0.1.0')
+
+    pom {
+        name = 'OpenAPI Coverage Report'
+        description = 'Records REST Assured traffic and renders an ' +
+            'interactive OpenAPI/Swagger coverage HTML report.'
+        url = 'https://github.com/dm9tr0/openapi-coverage-report'
+        licenses {
+            license {
+                name = 'MIT License'
+                url = 'https://opensource.org/licenses/MIT'
+            }
+        }
+        developers {
+            developer {
+                id = 'dm9tr0'
+                name = 'dm9tr0'
+                url = 'https://github.com/dm9tr0'
+            }
+        }
+        scm {
+            url = 'https://github.com/dm9tr0/openapi-coverage-report'
+            connection = 'scm:git:git://github.com/dm9tr0/openapi-coverage-report.git'
+            developerConnection = 'scm:git:ssh://git@github.com/dm9tr0/openapi-coverage-report.git'
+        }
+    }
+}

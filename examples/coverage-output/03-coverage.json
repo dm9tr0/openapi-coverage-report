@@ -1,0 +1,17 @@
+{
+  "format": "openapi-coverage-v1",
+  "paths": {
+    "/orders": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "present": true,
+          "contentType": "application/json"
+        },
+        "responses": {
+          "500": {}
+        }
+      }
+    }
+  }
+}

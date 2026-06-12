@@ -1,0 +1,13 @@
+{
+  "format": "openapi-coverage-v1",
+  "paths": {
+    "/customers/55": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {}
+        }
+      }
+    }
+  }
+}
