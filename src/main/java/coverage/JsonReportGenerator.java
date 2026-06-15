@@ -75,11 +75,13 @@ public final class JsonReportGenerator {
         summary.put("missedRequestCount", result.missedRequestCount());
         summary.put("undeclaredOpsCount", result.undeclaredOpsCount());
         summary.put("deprecatedOpsCount", result.deprecatedOpsCount());
+        summary.put("unmatchedRecordedCount", result.unmatchedRecordedOps().size());
 
         writeConditionTypes(root.putObject("conditionTypes"),
             result.conditionTypes());
         writeTags(root.putObject("tags"), result.tagSummaries());
         writeOperations(root.putArray("operations"));
+        writeUnmatched(root.putArray("unmatchedRequests"));
 
         final Path outputFile = Path.of(outputDir, "coverage-report.json");
         try {
@@ -144,6 +146,16 @@ public final class JsonReportGenerator {
                 cn.put("covered", c.covered());
                 cn.put("details", c.details());
             }
+        }
+    }
+
+    private void writeUnmatched(final ArrayNode unmatchedArray) {
+        for (final CoverageComparator.RecordedOperation op
+                : result.unmatchedRecordedOps()) {
+            final ObjectNode n = unmatchedArray.addObject();
+            n.put("method", op.method());
+            n.put("path", op.originalPath());
+            n.put("statusCode", op.statusCode());
         }
     }
 

@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
@@ -128,11 +129,26 @@ public final class CoverageComparator {
         // path-parameterised endpoint.
         final Map<OpenApiSpecParser.ApiOperation, List<RecordedOperation>> grouped
             = new HashMap<>();
+        final List<RecordedOperation> unmatchedOps = new ArrayList<>();
         for (final RecordedOperation op : recordedOps) {
-            for (final OpenApiSpecParser.ApiOperation specOp
-                    : findMatchingSpecOps(op.originalPath(), op.method())) {
-                grouped.computeIfAbsent(specOp, k -> new ArrayList<>()).add(op);
+            final List<OpenApiSpecParser.ApiOperation> matches =
+                findMatchingSpecOps(op.originalPath(), op.method());
+            if (matches.isEmpty()) {
+                unmatchedOps.add(op);
+            } else {
+                for (final OpenApiSpecParser.ApiOperation specOp : matches) {
+                    grouped.computeIfAbsent(specOp, k -> new ArrayList<>()).add(op);
+                }
             }
+        }
+        if (!unmatchedOps.isEmpty()) {
+            log.warn("{} recorded path(s) did not match any spec operation:",
+                unmatchedOps.size());
+            unmatchedOps.stream()
+                .collect(Collectors.groupingBy(
+                    o -> o.method() + " " + o.originalPath(),
+                    Collectors.counting()))
+                .forEach((key, count) -> log.warn("  {}x {}", count, key));
         }
 
         final List<OperationDetail> details = new ArrayList<>();
@@ -361,7 +377,8 @@ public final class CoverageComparator {
         return new DetailedCoverageResult(
             details, full, partial, empty, noCall, missedRequests,
             totalConditionsAll, coveredConditionsAll, typeSummaries,
-            tagSummaries, undeclaredOps, deprecatedOps);
+            tagSummaries, undeclaredOps, deprecatedOps,
+            Collections.unmodifiableList(unmatchedOps));
     }
 
     private List<OpenApiSpecParser.ApiOperation> findMatchingSpecOps(
@@ -613,7 +630,8 @@ public final class CoverageComparator {
             Map<String, ConditionTypeSummary> conditionTypes,
             Map<String, TagSummary> tagSummaries,
             int undeclaredOpsCount,
-            int deprecatedOpsCount) {
+            int deprecatedOpsCount,
+            List<RecordedOperation> unmatchedRecordedOps) {
 
         public int totalOperations() {
             return operations.size();

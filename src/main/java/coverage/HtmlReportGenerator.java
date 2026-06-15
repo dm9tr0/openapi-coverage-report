@@ -101,6 +101,9 @@ public final class HtmlReportGenerator {
         t = t.replace("{{OPS_ROWS}}", buildOperationRows());
         t = t.replace("{{EMPTY_BANNER}}",
             recordedOpsCount == 0 ? EMPTY_BANNER : "");
+        t = t.replace("{{UNMATCHED_COUNT}}",
+            String.valueOf(result.unmatchedRecordedOps().size()));
+        t = t.replace("{{UNMATCHED_SECTION}}", buildUnmatchedSection());
         t = t.replace("{{GEN_INFO}}", buildGenInfo());
         return t;
     }
@@ -110,6 +113,38 @@ public final class HtmlReportGenerator {
         + "— the report shows 0% coverage. Run your API test suite "
         + "first to generate coverage data.</div>\n";
 
+    private String buildUnmatchedSection() {
+        final java.util.List<CoverageComparator.RecordedOperation> unmatched =
+            result.unmatchedRecordedOps();
+        if (unmatched.isEmpty()) {
+            return "";
+        }
+        final StringBuilder sb = new StringBuilder();
+        sb.append("<h2>Unmatched requests</h2>\n");
+        sb.append("<div class=\"unmatched-banner\">");
+        sb.append("&#9888; <strong>").append(unmatched.size())
+            .append(" recorded request(s) did not match any spec operation.</strong>");
+        sb.append(" Possible causes: base-path mismatch, new endpoints not yet in spec,");
+        sb.append(" or stale coverage data from a previous test run.");
+        sb.append("</div>\n");
+        sb.append("<table class=\"unmatched-table\">\n");
+        sb.append("  <thead><tr>");
+        sb.append("<th>Method</th><th>Recorded path</th><th>Status</th>");
+        sb.append("</tr></thead>\n  <tbody>\n");
+        for (final CoverageComparator.RecordedOperation op : unmatched) {
+            sb.append("  <tr>");
+            sb.append("<td><span class=\"method method-")
+                .append(esc(op.method().toLowerCase(java.util.Locale.ROOT)))
+                .append("\">").append(esc(op.method())).append("</span></td>");
+            sb.append("<td class=\"path\">").append(esc(op.originalPath()))
+                .append("</td>");
+            sb.append("<td>").append(op.statusCode()).append("</td>");
+            sb.append("</tr>\n");
+        }
+        sb.append("  </tbody>\n</table>\n");
+        return sb.toString();
+    }
+
     private String buildGenInfo() {
         final String now = LocalDateTime.now()
             .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
@@ -118,6 +153,7 @@ public final class HtmlReportGenerator {
                 : result.operations()) {
             matchedCalls += op.callCount();
         }
+        final int unmatchedCount = result.unmatchedRecordedOps().size();
         return "  <div class=\"gen-info\">\n"
             + "    <div><span class=\"gi-k\">Spec source</span>"
             + "<span class=\"gi-v\">" + esc(specSource) + "</span></div>\n"
@@ -127,6 +163,10 @@ public final class HtmlReportGenerator {
             + "<span class=\"gi-v\">" + recordedOpsCount + "</span></div>\n"
             + "    <div><span class=\"gi-k\">Requests matched to spec</span>"
             + "<span class=\"gi-v\">" + matchedCalls + "</span></div>\n"
+            + "    <div><span class=\"gi-k\">Requests not matched to spec</span>"
+            + "<span class=\"gi-v\">"
+            + (unmatchedCount > 0 ? "⚠ " : "") + unmatchedCount
+            + "</span></div>\n"
             + "    <div><span class=\"gi-k\">Operations in spec</span>"
             + "<span class=\"gi-v\">" + result.totalOperations()
             + "</span></div>\n"
@@ -714,6 +754,14 @@ th:nth-child(6), td:nth-child(6) { width: 70px; text-align: center; }
 .status-undeclared { background: var(--orange-bg); color: var(--orange);
     border: 1px dashed var(--orange); }
 .undeclared-h { color: var(--orange); }
+.unmatched-banner { background: var(--orange-bg); color: var(--orange);
+    border: 1px solid var(--orange); border-radius: 6px;
+    padding: 10px 14px; margin: 8px 0 12px; font-size: 0.9em; }
+.unmatched-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+.unmatched-table th { background: var(--th-bg); padding: 6px 10px;
+    text-align: left; font-size: 0.8em; border-bottom: 2px solid var(--border); }
+.unmatched-table td { padding: 5px 10px; border-bottom: 1px solid var(--border);
+    font-size: 0.85em; }
 .op-row { cursor: pointer; }
 .op-row.hidden { display: none; }
 .op-details { display: none; background: var(--details-bg); }
@@ -831,6 +879,11 @@ th:nth-child(6), td:nth-child(6) { width: 70px; text-align: center; }
     <div class="num orange">{{UNDECLARED_OPS}}</div>
     <div class="lbl">Undeclared statuses</div>
   </div>
+  <div class="summary-card" data-filter="unmatched"
+    title="Recorded requests that did not match any spec operation (base-path or spec mismatch)">
+    <div class="num orange">{{UNMATCHED_COUNT}}</div>
+    <div class="lbl">Unmatched requests</div>
+  </div>
   <div class="summary-card" title="Conditions coverage">
     <div class="num {{COND_PCT_CSS}}">{{COND_PCT}}%
       ({{COND_COVERED}}/{{COND_TOTAL}})</div>
@@ -911,6 +964,7 @@ th:nth-child(6), td:nth-child(6) { width: 70px; text-align: center; }
 </table>
 <div class="no-results" id="noResults">No operations match the current filters.</div>
 
+{{UNMATCHED_SECTION}}
 <h2>Generation info</h2>
 {{GEN_INFO}}
 

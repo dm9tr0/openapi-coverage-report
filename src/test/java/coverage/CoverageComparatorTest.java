@@ -151,6 +151,32 @@ class CoverageComparatorTest {
             new File("/no/such/dir").getPath())).isEmpty();
     }
 
+    @Test
+    void tracksUnmatchedRecordedOperations() {
+        final ApiSpec spec = new ApiSpec("3.0.3", List.of(
+            op("GET", "/orders", Set.of(200), "Orders", false)
+        ));
+        final List<RecordedOperation> recorded = List.of(
+            rec("/orders", "GET", 200, false),
+            rec("/translationlayerapi/v6/periods/favr/submit/123", "POST", 200, false),
+            rec("/translationlayerapi/v6/periods/submission/odometer", "GET", 400, false)
+        );
+        final DetailedCoverageResult r =
+            new CoverageComparator(spec, recorded).analyze();
+        assertThat(r.unmatchedRecordedOps()).hasSize(2);
+        assertThat(r.unmatchedRecordedOps())
+            .extracting(RecordedOperation::originalPath)
+            .containsExactlyInAnyOrder(
+                "/translationlayerapi/v6/periods/favr/submit/123",
+                "/translationlayerapi/v6/periods/submission/odometer");
+    }
+
+    @Test
+    void noUnmatchedWhenAllPathsMatch() {
+        final DetailedCoverageResult r = analyzeFixture();
+        assertThat(r.unmatchedRecordedOps()).isEmpty();
+    }
+
     private static org.assertj.core.data.Offset<Double> within(final double v) {
         return org.assertj.core.data.Offset.offset(v);
     }
