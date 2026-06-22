@@ -27,22 +27,34 @@ public final class HtmlReportGenerator {
     private final String specVersion;
     private final String specSource;
     private final int recordedOpsCount;
+    private final String reportName;
 
     public HtmlReportGenerator(
             final CoverageComparator.DetailedCoverageResult result,
             final String specVersion,
             final String specSource,
             final int recordedOpsCount) {
+        this(result, specVersion, specSource, recordedOpsCount,
+            "coverage-report.html");
+    }
+
+    public HtmlReportGenerator(
+            final CoverageComparator.DetailedCoverageResult result,
+            final String specVersion,
+            final String specSource,
+            final int recordedOpsCount,
+            final String reportName) {
         this.result = result;
         this.specVersion = specVersion;
         this.specSource = specSource;
         this.recordedOpsCount = recordedOpsCount;
+        this.reportName = reportName;
     }
 
     @SneakyThrows
     public void generate(final String outputPath) {
         final String html = buildHtml();
-        final Path outputFile = Path.of(outputPath, "coverage-report.html");
+        final Path outputFile = Path.of(outputPath, reportName);
         Files.createDirectories(outputFile.getParent());
         Files.writeString(outputFile, html, StandardCharsets.UTF_8);
         log.info("Coverage report written to {}", outputFile.toAbsolutePath());
@@ -104,6 +116,7 @@ public final class HtmlReportGenerator {
         t = t.replace("{{UNMATCHED_COUNT}}",
             String.valueOf(result.unmatchedRecordedOps().size()));
         t = t.replace("{{UNMATCHED_SECTION}}", buildUnmatchedSection());
+        t = t.replace("{{SUGGESTIONS_SECTION}}", buildSuggestionsSection());
         t = t.replace("{{GEN_INFO}}", buildGenInfo());
         return t;
     }
@@ -120,6 +133,7 @@ public final class HtmlReportGenerator {
             return "";
         }
         final StringBuilder sb = new StringBuilder();
+        sb.append("<section id=\"unmatchedRequests\">\n");
         sb.append("<h2>Unmatched requests</h2>\n");
         sb.append("<div class=\"unmatched-banner\">");
         sb.append("&#9888; <strong>").append(unmatched.size())
@@ -142,6 +156,41 @@ public final class HtmlReportGenerator {
             sb.append("</tr>\n");
         }
         sb.append("  </tbody>\n</table>\n");
+        sb.append("</section>\n");
+        return sb.toString();
+    }
+
+    private String buildSuggestionsSection() {
+        final java.util.List<CoverageComparator.Suggestion> suggestions =
+            result.suggestions();
+        if (suggestions.isEmpty()) {
+            return "";
+        }
+        final StringBuilder sb = new StringBuilder();
+        sb.append("<section id=\"suggestedTestGaps\">\n");
+        sb.append("<h2>Suggested test gaps</h2>\n");
+        sb.append("<div class=\"suggestions-banner\">");
+        sb.append("Advisory only: these suggestions do not affect coverage "
+            + "percentages.</div>\n");
+        sb.append("<table class=\"suggestions-table\">\n");
+        sb.append("  <thead><tr>");
+        sb.append("<th>Method</th><th>Path</th><th>Type</th><th>Value</th>"
+            + "<th>Reason</th>");
+        sb.append("</tr></thead>\n  <tbody>\n");
+        for (final CoverageComparator.Suggestion suggestion : suggestions) {
+            sb.append("  <tr>");
+            sb.append("<td><span class=\"method method-")
+                .append(esc(suggestion.method().toLowerCase(java.util.Locale.ROOT)))
+                .append("\">").append(esc(suggestion.method())).append("</span></td>");
+            sb.append("<td class=\"path\">").append(esc(suggestion.path()))
+                .append("</td>");
+            sb.append("<td>").append(esc(suggestion.type())).append("</td>");
+            sb.append("<td>").append(esc(suggestion.value())).append("</td>");
+            sb.append("<td>").append(esc(suggestion.reason())).append("</td>");
+            sb.append("</tr>\n");
+        }
+        sb.append("  </tbody>\n</table>\n");
+        sb.append("</section>\n");
         return sb.toString();
     }
 
@@ -238,7 +287,7 @@ public final class HtmlReportGenerator {
 
     private String buildOperationRows() {
         final StringBuilder sb = new StringBuilder();
-        // Default order: worst coverage first so gaps surface at the top.
+        // Default sorting: worst coverage first so gaps surface at the top.
         final List<CoverageComparator.OperationDetail> ops =
             new ArrayList<>(result.operations());
         ops.sort(Comparator
@@ -259,6 +308,7 @@ public final class HtmlReportGenerator {
             final int barW = op.hasCalls()
                 ? (int) Math.round(op.coveragePercent()) : 0;
             final String covSlug = coverageSlug(label);
+            final String badgeTitle = coverageTitle(op);
             final String summaryHtml = op.summary() == null
                 || op.summary().isBlank()
                 ? ""
@@ -298,7 +348,8 @@ public final class HtmlReportGenerator {
 + summaryHtml + "</td>\n"
 + "      <td><span class=\"tag-pill\">" + esc(op.tag()) + "</span></td>\n"
 + "      <td>"
-+ "<span class=\"badge " + badge + "\">" + label + "</span>\n"
++ "<span class=\"badge " + badge + "\" title=\"" + esc(badgeTitle)
++ "\">" + label + "</span>\n"
 + undeclaredBadge);
             if (op.hasCalls()) {
                 sb.append(
@@ -445,7 +496,7 @@ public final class HtmlReportGenerator {
         if (pct > 0) {
             return "Partial";
         }
-        return "Empty";
+        return "Called / uncovered";
     }
 
     private static String coverageSlug(final String label) {
@@ -454,8 +505,23 @@ public final class HtmlReportGenerator {
             case "Full": return "full";
             case "Partial": return "partial";
             case "Empty": return "empty";
+            case "Called / uncovered": return "empty";
             default: return label.toLowerCase().replace(" ", "-");
         }
+    }
+
+    private static String coverageTitle(
+            final CoverageComparator.OperationDetail op) {
+        if (!op.hasCalls()) {
+            return "No recorded calls matched this operation";
+        }
+        if (op.coveragePercent() == 0.0) {
+            return "Calls matched this operation, but no counted coverage "
+                + "conditions were satisfied";
+        }
+        return "Recorded calls satisfied "
+            + op.coveredConditions() + "/" + op.totalConditions()
+            + " counted coverage conditions";
     }
 
     private static String pctColorClass(final double pct) {
@@ -757,10 +823,14 @@ th:nth-child(6), td:nth-child(6) { width: 70px; text-align: center; }
 .unmatched-banner { background: var(--orange-bg); color: var(--orange);
     border: 1px solid var(--orange); border-radius: 6px;
     padding: 10px 14px; margin: 8px 0 12px; font-size: 0.9em; }
+.suggestions-banner { background: var(--th-bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; margin: 8px 0 12px; font-size: 0.9em; }
 .unmatched-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-.unmatched-table th { background: var(--th-bg); padding: 6px 10px;
+.suggestions-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+.unmatched-table th, .suggestions-table th { background: var(--th-bg); padding: 6px 10px;
     text-align: left; font-size: 0.8em; border-bottom: 2px solid var(--border); }
-.unmatched-table td { padding: 5px 10px; border-bottom: 1px solid var(--border);
+.unmatched-table td, .suggestions-table td { padding: 5px 10px; border-bottom: 1px solid var(--border);
     font-size: 0.85em; }
 .op-row { cursor: pointer; }
 .op-row.hidden { display: none; }
@@ -965,13 +1035,14 @@ th:nth-child(6), td:nth-child(6) { width: 70px; text-align: center; }
 <div class="no-results" id="noResults">No operations match the current filters.</div>
 
 {{UNMATCHED_SECTION}}
+{{SUGGESTIONS_SECTION}}
 <h2>Generation info</h2>
 {{GEN_INFO}}
 
 <script>
 /* ==== Theme toggle: auto -> light -> dark (persisted) ==== */
 (function() {
-  var order = ['auto', 'light', 'dark'];
+  var themeModes = ['auto', 'light', 'dark'];
   var labels = { auto: '🌓 Auto', light: '☀ Light', dark: '🌙 Dark' };
   var btn = document.getElementById('themeToggle');
   function apply(mode) {
@@ -984,10 +1055,10 @@ th:nth-child(6), td:nth-child(6) { width: 70px; text-align: center; }
   }
   var saved = null;
   try { saved = localStorage.getItem('coverageTheme'); } catch (e) { saved = null; }
-  apply(order.indexOf(saved) >= 0 ? saved : 'auto');
+  apply(themeModes.indexOf(saved) >= 0 ? saved : 'auto');
   btn.addEventListener('click', function() {
     var cur = document.documentElement.getAttribute('data-theme') || 'auto';
-    var next = order[(order.indexOf(cur) + 1) % order.length];
+    var next = themeModes[(themeModes.indexOf(cur) + 1) % themeModes.length];
     apply(next);
     try { localStorage.setItem('coverageTheme', next); } catch (e) { /* ignore */ }
   });
@@ -1137,6 +1208,15 @@ var state = { cov: 'all', tag: null, search: '', missedType: null };
 
 /* ==== Cov filter setter ==== */
 function setCovFilter(filterVal) {
+  if (filterVal === 'unmatched') {
+    state.cov = 'all';
+    applyFilters();
+    var unmatched = document.getElementById('unmatchedRequests');
+    if (unmatched) {
+      unmatched.scrollIntoView({ behavior: 'smooth' });
+    }
+    return;
+  }
   state.cov = filterVal;
   applyFilters();
   document.getElementById('opsTable').scrollIntoView({ behavior: 'smooth' });

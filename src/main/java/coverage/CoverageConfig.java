@@ -14,8 +14,9 @@ import lombok.extern.slf4j.Slf4j;
  * format (ghostty-style) — one setting per line, no JSON, no extra dependency.
  *
  * <p><b>Optional by design:</b> with no config the reporter behaves exactly as
- * before (zero-config). A config only ever <i>removes</i> things from the
- * denominator — it never changes default behaviour on its own.
+ * before (zero-config). Ignore keys remove things from the denominator,
+ * {@code only-declared-status} adds an opt-in counted condition, and
+ * suggestion keys emit advisory planning signals without changing coverage.
  *
  * <p>Example {@code openapi-coverage.conf}:
  * <pre>
@@ -25,6 +26,8 @@ import lombok.extern.slf4j.Slf4j;
  * ignore-status = 503
  * ignore-operation = POST /internal/.*
  * ignore-operation = /admin/.*
+ * only-declared-status = true
+ * suggest-test-gaps = true
  * </pre>
  *
  * Keys:
@@ -35,16 +38,43 @@ import lombok.extern.slf4j.Slf4j;
  *       status no longer counts as a condition.</li>
  *   <li>{@code ignore-operation} — {@code [METHOD] <path-regex>}; drop matching
  *       operations. Method is optional (any method if omitted).</li>
+ *   <li>{@code only-declared-status} — fail a condition when runtime returns an
+ *       HTTP status not declared by the spec.</li>
+ *   <li>{@code html-report-name}/{@code json-report-name} — override generated
+ *       report filenames.</li>
+ *   <li>{@code suggest-test-gaps} and {@code suggest-*} keys — emit advisory
+ *       missing-test suggestions without changing coverage percentages.</li>
  * </ul>
  */
 @Slf4j
 public record CoverageConfig(
         List<OperationMatcher> ignoreOperations,
         Set<Integer> ignoreStatuses,
-        boolean ignoreDeprecated) {
+        boolean ignoreDeprecated,
+        boolean onlyDeclaredStatus,
+        String htmlReportName,
+        String jsonReportName,
+        boolean suggestTestGaps,
+        Set<Integer> suggestStatuses,
+        boolean suggestEmptyParameter,
+        boolean suggestBlankParameter,
+        boolean suggestMissingRequiredParameter,
+        boolean suggestInvalidMediaType) {
 
     private static final Set<String> HTTP_METHODS = Set.of(
         "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE");
+    private static final String DEFAULT_HTML_REPORT_NAME = "coverage-report.html";
+    private static final String DEFAULT_JSON_REPORT_NAME = "coverage-report.json";
+    private static final Set<Integer> DEFAULT_SUGGEST_STATUSES
+        = Set.of(400, 401, 403, 404);
+
+    public CoverageConfig {
+        ignoreOperations = List.copyOf(ignoreOperations);
+        ignoreStatuses = Set.copyOf(ignoreStatuses);
+        htmlReportName = defaultIfBlank(htmlReportName, DEFAULT_HTML_REPORT_NAME);
+        jsonReportName = defaultIfBlank(jsonReportName, DEFAULT_JSON_REPORT_NAME);
+        suggestStatuses = Set.copyOf(suggestStatuses);
+    }
 
     /**
      * Matches a spec operation by HTTP method (optional) and a path regex.
@@ -54,7 +84,10 @@ public record CoverageConfig(
 
     /** @return a no-op config (nothing ignored). */
     public static CoverageConfig empty() {
-        return new CoverageConfig(List.of(), new LinkedHashSet<>(), false);
+        return new CoverageConfig(
+            List.of(), new LinkedHashSet<>(), false, false,
+            DEFAULT_HTML_REPORT_NAME, DEFAULT_JSON_REPORT_NAME, false,
+            new LinkedHashSet<>(), true, true, true, true);
     }
 
     /**
@@ -71,7 +104,16 @@ public record CoverageConfig(
         }
         final List<OperationMatcher> ignoreOps = new ArrayList<>();
         final Set<Integer> ignoreStatuses = new LinkedHashSet<>();
+        final Set<Integer> suggestStatuses = new LinkedHashSet<>();
         boolean ignoreDeprecated = false;
+        boolean onlyDeclaredStatus = false;
+        String htmlReportName = DEFAULT_HTML_REPORT_NAME;
+        String jsonReportName = DEFAULT_JSON_REPORT_NAME;
+        boolean suggestTestGaps = false;
+        boolean suggestEmptyParameter = true;
+        boolean suggestBlankParameter = true;
+        boolean suggestMissingRequiredParameter = true;
+        boolean suggestInvalidMediaType = true;
 
         final List<String> lines;
         try {
@@ -102,17 +144,46 @@ public record CoverageConfig(
                     ignoreDeprecated = Boolean.parseBoolean(value);
                 case "ignore-status" -> parseStatus(value, ignoreStatuses, path, lineNo);
                 case "ignore-operation" -> ignoreOps.add(parseOperation(value));
+                case "only-declared-status" ->
+                    onlyDeclaredStatus = Boolean.parseBoolean(value);
+                case "html-report-name" ->
+                    htmlReportName = defaultIfBlank(value, DEFAULT_HTML_REPORT_NAME);
+                case "json-report-name" ->
+                    jsonReportName = defaultIfBlank(value, DEFAULT_JSON_REPORT_NAME);
+                case "suggest-test-gaps" ->
+                    suggestTestGaps = Boolean.parseBoolean(value);
+                case "suggest-status" ->
+                    parseStatus(value, suggestStatuses, path, lineNo);
+                case "suggest-empty-parameter" ->
+                    suggestEmptyParameter = Boolean.parseBoolean(value);
+                case "suggest-blank-parameter" ->
+                    suggestBlankParameter = Boolean.parseBoolean(value);
+                case "suggest-missing-required-parameter" ->
+                    suggestMissingRequiredParameter = Boolean.parseBoolean(value);
+                case "suggest-invalid-media-type" ->
+                    suggestInvalidMediaType = Boolean.parseBoolean(value);
                 default -> log.warn("config {}:{} — unknown key '{}', skipping.",
                     path, lineNo, key);
             }
         }
 
         final CoverageConfig cfg
-            = new CoverageConfig(ignoreOps, ignoreStatuses, ignoreDeprecated);
+            = new CoverageConfig(
+                ignoreOps, ignoreStatuses, ignoreDeprecated,
+                onlyDeclaredStatus, htmlReportName, jsonReportName,
+                suggestTestGaps, suggestStatuses, suggestEmptyParameter,
+                suggestBlankParameter, suggestMissingRequiredParameter,
+                suggestInvalidMediaType);
         log.info("Loaded coverage config from {}: ignoreDeprecated={}, "
-            + "ignoreStatuses={}, ignoreOperations={}", path,
-            ignoreDeprecated, ignoreStatuses, ignoreOps.size());
+            + "ignoreStatuses={}, ignoreOperations={}, onlyDeclaredStatus={}, "
+            + "suggestTestGaps={}", path, ignoreDeprecated, ignoreStatuses,
+            ignoreOps.size(), onlyDeclaredStatus, suggestTestGaps);
         return cfg;
+    }
+
+    private static String defaultIfBlank(final String value,
+            final String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value.trim();
     }
 
     private static String stripComment(final String line) {
@@ -163,5 +234,14 @@ public record CoverageConfig(
      */
     public boolean ignoresStatus(final int statusCode) {
         return ignoreStatuses.contains(statusCode);
+    }
+
+    /**
+     * @return explicitly configured suggestion statuses, or common API negative
+     *         statuses when no custom values are configured
+     */
+    public Set<Integer> effectiveSuggestStatuses() {
+        return suggestStatuses.isEmpty()
+            ? DEFAULT_SUGGEST_STATUSES : suggestStatuses;
     }
 }

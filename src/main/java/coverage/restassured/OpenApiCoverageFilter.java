@@ -149,7 +149,7 @@ public class OpenApiCoverageFilter implements Filter {
    *
    * @param requestSpec the request being recorded
    * @param response    the received response
-   * @return the distinct media types exercised, in encounter order
+   * @return the distinct media types exercised, in encounter sequence
    */
   private static List<String> collectMediaTypes(
       final FilterableRequestSpecification requestSpec,

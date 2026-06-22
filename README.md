@@ -14,8 +14,8 @@ It records what your tests send, compares it against a live or local OpenAPI
 
 ## Why
 
-The widely used `swagger-coverage` CLI is effectively unmaintained and does not
-parse OpenAPI 3.1. This tool is a self-contained replacement:
+OpenAPI coverage needs to work with current specs and produce useful feedback
+without a heavy parser/runtime stack. This tool:
 
 - Parses OpenAPI **3.0.x and 3.1.x** (and Swagger 2.0) with plain Jackson — no
   swagger-parser dependency.
@@ -53,7 +53,7 @@ Gradle:
 
 ```gradle
 dependencies {
-    testImplementation 'io.github.dm9tr0:openapi-coverage-report:0.2.0'
+    testImplementation 'io.github.dm9tr0:openapi-coverage-report:0.4.0'
 }
 ```
 
@@ -63,7 +63,7 @@ Maven:
 <dependency>
   <groupId>io.github.dm9tr0</groupId>
   <artifactId>openapi-coverage-report</artifactId>
-  <version>0.2.0</version>
+  <version>0.4.0</version>
 </dependency>
 ```
 
@@ -97,6 +97,38 @@ Run your test suite as usual — one `*-coverage.json` file is written per reque
 
 ### 2. Generate the report in your project
 
+Build the local CLI distribution:
+
+```bash
+./gradlew installDist
+```
+
+Run the generated executable:
+
+```bash
+build/install/openapi-coverage/bin/openapi-coverage \
+  --spec examples/openapi.json \
+  --input examples/coverage-output \
+  --output examples/report
+```
+
+Add `--config <path>` when you have a config file, and `--min-coverage <N>` in
+CI when the threshold matches your expected recorded coverage.
+
+The positional form is still supported:
+
+```bash
+build/install/openapi-coverage/bin/openapi-coverage \
+  examples/openapi.json examples/openapi.json examples/coverage-output examples/report
+```
+
+For development inside this repository, the same main class can also be run
+without installing the distribution:
+
+```bash
+./gradlew run --args="--spec examples/openapi.json --input examples/coverage-output --output examples/report"
+```
+
 The report generator is a `main` class (`coverage.OpenApiCoverageReporter`) —
 there is no Gradle plugin, so wire a `JavaExec` task into your own
 `build.gradle`:
@@ -111,7 +143,7 @@ tasks.register("coverageReport", JavaExec) {
     classpath = sourceSets.test.runtimeClasspath + configurations.coverageLogging
     mainClass = "coverage.OpenApiCoverageReporter"
     args(
-        "https://api.example.com/v3/api-docs",  // spec URL or local file
+        "https://example.test/openapi.json",  // spec URL or local file
         "",                                      // fallback spec path ("" = none)
         "build/coverage-output",                 // recorded *-coverage.json dir
         "build/reports",                         // output dir
@@ -132,13 +164,14 @@ Arguments — positional first, then optional flags (anywhere):
 | Arg | Meaning |
 |-----|---------|
 | `specUrlOrFile` | OpenAPI document — an `http(s)` URL **or** a local file path |
-| `fallbackSpecPath` | Local spec used if the first can't be loaded (`""` for none) |
+| `fallbackSpecPath` | Local spec used if the first can't be loaded; optional in named CLI mode |
 | `coverageOutputDir` | Directory of recorded `*-coverage.json` files |
 | `outputDir` *(optional)* | Where reports are written (default `build/reports`) |
+| `--fallback <path>` *(optional)* | Local fallback spec for named CLI mode |
 | `--min-coverage <N>` *(optional)* | Exit code **2** if coverage % is below N (CI gate) |
 | `--config <path>` *(optional)* | Path to a config file (see below) |
 
-Outputs written to `<outputDir>`:
+Outputs written to `<outputDir>` unless renamed in config:
 
 - `coverage-report.html` — the interactive report
 - `coverage-report.json` — machine-readable result for CI (metrics, gating)
@@ -146,7 +179,8 @@ Outputs written to `<outputDir>`:
 ### 3. Optional config (`openapi-coverage.conf`)
 
 A flat `key = value` file (no JSON). It only ever *removes* things from the
-coverage denominator — with no config the tool runs with sensible defaults:
+coverage denominator unless explicitly noted — with no config the tool runs with
+sensible defaults:
 
 ```
 # one setting per line; '#' starts a comment, blank lines are ignored
@@ -155,13 +189,57 @@ ignore-status = 500
 ignore-status = 503
 ignore-operation = POST /internal/.*
 ignore-operation = /admin/.*
+only-declared-status = true
+html-report-name = api-coverage.html
+json-report-name = api-coverage.json
+suggest-test-gaps = true
+suggest-status = 401
+suggest-status = 403
+suggest-empty-parameter = true
+suggest-blank-parameter = true
+suggest-missing-required-parameter = true
+suggest-invalid-media-type = true
 ```
 
-| Key | Effect |
-|-----|--------|
-| `ignore-deprecated` | `true`/`false` — drop deprecated operations from coverage |
-| `ignore-status` | a status code (repeat for several) — stops counting as a condition |
-| `ignore-operation` | `[METHOD] <path-regex>` — drop matching operations (method optional) |
+| Key | Default | Repeatable | Effect |
+|-----|---------|------------|--------|
+| `ignore-deprecated` | `false` | no | Removes deprecated operations from all coverage calculations. |
+| `ignore-status` | none | yes | Removes a documented status from response-status conditions. |
+| `ignore-operation` | none | yes | Removes operations matching `[METHOD] <path-regex>`; method is optional. |
+| `only-declared-status` | `false` | no | Adds a condition that fails when recorded calls return statuses not declared in the spec. |
+| `html-report-name` | `coverage-report.html` | no | Changes the generated HTML filename. |
+| `json-report-name` | `coverage-report.json` | no | Changes the generated JSON filename. |
+| `suggest-test-gaps` | `false` | no | Enables advisory suggestions; suggestions never affect coverage percentage. |
+| `suggest-status` | `400`, `401`, `403`, `404` | yes | Statuses to suggest as missing negative/status tests when `suggest-test-gaps` is enabled. |
+| `suggest-empty-parameter` | `true` | no | Suggests an empty-value parameter test after a non-empty value was observed. |
+| `suggest-blank-parameter` | `true` | no | Suggests a blank-value parameter test after a non-empty value was observed. |
+| `suggest-missing-required-parameter` | `true` | no | Suggests omitting a required parameter after it was observed in recorded calls. |
+| `suggest-invalid-media-type` | `true` | no | Suggests an unsupported `Content-Type` test for operations with a request body. |
+
+### 4. Compatibility matrix
+
+| Capability | Support |
+|------------|---------|
+| Swagger 2.0 | Yes |
+| OpenAPI 3.0.x | Yes |
+| OpenAPI 3.1.x | Yes |
+| Local `$ref` for parameters/request bodies/responses | Yes |
+| Path-level parameters | Yes |
+| REST Assured recorder | Yes |
+| Generic JSON record input | Yes |
+| CLI run from terminal | Yes, via `./gradlew installDist` then `build/install/openapi-coverage/bin/openapi-coverage ...` |
+| HTML report | Yes |
+| JSON report | Yes |
+| Custom report filenames | Yes, via flat config |
+| Deprecated-operation exclusion | Yes |
+| Status/operation ignore rules | Yes |
+| Undeclared status reporting | Yes |
+| `only-declared-status` as a counted condition | Optional |
+| Advisory negative-test suggestions | Optional |
+
+The compatibility fixture suite lives under `src/test/resources/fixtures/` and is
+covered by unit tests. Add new fixture specs there when extending Swagger/OpenAPI
+parsing behavior.
 
 ## What the report shows
 
@@ -172,8 +250,11 @@ ignore-operation = /admin/.*
 - **Coverage by tag** — per-tag rollups taken from the spec's operation tags.
 - **Undeclared statuses** — a separate, opt-in signal for operations that returned
   a status code the spec does not describe. These are **not** counted against
-  coverage (the spec is the gap, not the test), but are surfaced via a badge,
-  a filter, and a summary count so they're easy to find.
+  coverage by default (the spec is the gap, not the test), but are surfaced via a
+  badge, a filter, and a summary count so they're easy to find. Enable
+  `only-declared-status = true` to count them as uncovered conditions.
+- **Suggested test gaps** — optional advisory hints for common negative/status
+  cases. These never affect the coverage percentage.
 - **Search, filters, deep-links** — filter by coverage/tag/missing-condition,
   search by method/path/tag/summary, and share a URL hash that restores the view.
 - **Worst-first ordering**, expand/collapse, sortable columns.
@@ -181,7 +262,7 @@ ignore-operation = /admin/.*
 - **Generation info** — spec source, requests parsed/matched, operation count,
   deprecated count, and a timestamp.
 
-## The coverage model
+## Coverage calculation
 
 For every operation in the spec the reporter evaluates *conditions*:
 
@@ -189,8 +270,8 @@ For every operation in the spec the reporter evaluates *conditions*:
   was actually received.
 - **Check parameter value** — each documented query/header parameter; covered when
   sent at least once.
-- **Request Body Availability** — for body methods (POST/PUT/PATCH); covered when a
-  non-empty body was sent.
+- **Request Body Availability** — for operations whose spec declares a request
+  body; covered when a non-empty body was sent.
 
 Coverage percentage = covered conditions / total conditions. Operations are
 classified **Full / Partial / Empty / No call**.
@@ -203,10 +284,10 @@ classified **Full / Partial / Empty / No call**.
 ## Path matching
 
 Recorded request paths are matched to spec operations with templated-path regex
-(`/orders/123` matches `/orders/{id}`). Any deployment **base path** is absorbed
+(`/resources/123` matches `/resources/{id}`). Any deployment **base path** is absorbed
 automatically: the matcher tries the full recorded path, then progressively strips
-leading segments until it matches a spec path — so `/api/orders/1` matches a spec
-that declares `/orders/{id}` with no configuration.
+leading segments until it matches a spec path — so `/api/resources/1` matches a spec
+that declares `/resources/{id}` with no configuration.
 
 ## The coverage record format
 
@@ -218,7 +299,7 @@ just REST Assured:
 {
   "format": "openapi-coverage-v1",
   "paths": {
-    "/orders": {
+    "/resources": {
       "post": {
         "parameters": [{ "name": "Accept", "in": "header", "value": "*/*" }],
         "requestBody": { "present": true, "contentType": "application/json" },
@@ -248,6 +329,7 @@ No-call operations, an undeclared status, and a deprecated operation).
 
 ```bash
 ./gradlew assemble        # compile the engine + filter
+./gradlew installDist     # build the local openapi-coverage CLI
 ./gradlew test            # run the unit tests
 ./gradlew coverageReport  # generate a report (see Usage)
 ```

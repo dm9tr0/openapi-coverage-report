@@ -27,8 +27,6 @@ import lombok.extern.slf4j.Slf4j;
 public final class CoverageComparator {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final Set<String> BODY_METHODS = Set.of("POST", "PUT", "PATCH");
-
     private final OpenApiSpecParser.ApiSpec spec;
     private final List<RecordedOperation> recordedOps;
     private final CoverageConfig config;
@@ -124,8 +122,8 @@ public final class CoverageComparator {
      */
     public DetailedCoverageResult analyze() {
         // Map each recorded request to the spec operation(s) it matches, using
-        // templated-path regex matching (e.g. recorded /orders/12345 matches
-        // spec /orders/{id}). Exact string equality would miss every
+        // templated-path regex matching (e.g. recorded /resources/12345 matches
+        // spec /resources/{id}). Exact string equality would miss every
         // path-parameterised endpoint.
         final Map<OpenApiSpecParser.ApiOperation, List<RecordedOperation>> grouped
             = new HashMap<>();
@@ -162,6 +160,9 @@ public final class CoverageComparator {
         int requestBodyCovered = 0;
         int mediaTypeTotal = 0;
         int mediaTypeCovered = 0;
+        int onlyDeclaredStatusTotal = 0;
+        int onlyDeclaredStatusCovered = 0;
+        final List<Suggestion> suggestions = new ArrayList<>();
 
         for (final OpenApiSpecParser.ApiOperation specOp : spec.operations()) {
             if (config.ignores(specOp)) {
@@ -210,6 +211,21 @@ public final class CoverageComparator {
             }
             Collections.sort(undeclared);
 
+            if (config.onlyDeclaredStatus() && hasCalls) {
+                final boolean covered = undeclared.isEmpty();
+                conditions.add(new ConditionResult(
+                    "Only Declared Status",
+                    "only statuses declared in the spec were returned",
+                    covered,
+                    covered ? "" : "Undeclared status: " + joinInts(undeclared)));
+                onlyDeclaredStatusTotal++;
+                totalConditionsAll++;
+                if (covered) {
+                    onlyDeclaredStatusCovered++;
+                    coveredConditionsAll++;
+                }
+            }
+
             // --- Parameter value conditions ---
             final Set<String> seenParams = new HashSet<>();
             final Set<String> seenNonEmptyParams = new HashSet<>();
@@ -221,6 +237,9 @@ public final class CoverageComparator {
                     : specOp.parameters()) {
                 // Skip path params and always-present headers
                 if ("path".equals(param.in())) {
+                    continue;
+                }
+                if ("body".equals(param.in())) {
                     continue;
                 }
                 if ("header".equals(param.in())
@@ -247,7 +266,7 @@ public final class CoverageComparator {
             }
 
             // --- Request Body Availability ---
-            if (BODY_METHODS.contains(specOp.method().toUpperCase())) {
+            if (specOp.hasDeclaredRequestBody()) {
                 requestBodyTotal++;
                 // Covered when at least one recorded call actually sent a
                 // non-empty request body (precise, not approximated).
@@ -286,6 +305,10 @@ public final class CoverageComparator {
                 }
             }
 
+            suggestions.addAll(buildSuggestions(
+                specOp, hasCalls, seenStatuses, seenParams,
+                seenNonEmptyParams, seenMediaTypes));
+
             details.add(new OperationDetail(
                 specOp.path(), specOp.method(),
                 specOp.tag(), specOp.summary(), specOp.deprecated(),
@@ -294,6 +317,7 @@ public final class CoverageComparator {
                 undeclared,
                 specOp.parameters().stream()
                     .filter(p -> !"path".equals(p.in()))
+                    .filter(p -> !"body".equals(p.in()))
                     .map(OpenApiSpecParser.ParameterSpec::name).toList(),
                 new ArrayList<>(seenParams),
                 conditions,
@@ -373,12 +397,80 @@ public final class CoverageComparator {
                 "Check that each declared request/response content type "
                     + "was exercised",
                 mediaTypeCovered, mediaTypeTotal));
+        if (config.onlyDeclaredStatus()) {
+            typeSummaries.put("Only Declared Status",
+                new ConditionTypeSummary("Only Declared Status",
+                    "Check that runtime statuses are declared in the spec",
+                    onlyDeclaredStatusCovered, onlyDeclaredStatusTotal));
+        }
 
         return new DetailedCoverageResult(
             details, full, partial, empty, noCall, missedRequests,
             totalConditionsAll, coveredConditionsAll, typeSummaries,
             tagSummaries, undeclaredOps, deprecatedOps,
-            Collections.unmodifiableList(unmatchedOps));
+            Collections.unmodifiableList(unmatchedOps),
+            Collections.unmodifiableList(suggestions));
+    }
+
+    private List<Suggestion> buildSuggestions(
+            final OpenApiSpecParser.ApiOperation specOp,
+            final boolean hasCalls,
+            final Set<Integer> seenStatuses,
+            final Set<String> seenParams,
+            final Set<String> seenNonEmptyParams,
+            final Set<String> seenMediaTypes) {
+        if (!config.suggestTestGaps()) {
+            return Collections.emptyList();
+        }
+        final List<Suggestion> result = new ArrayList<>();
+        for (final int status : config.effectiveSuggestStatuses()) {
+            if (seenStatuses.contains(status)) {
+                continue;
+            }
+            final boolean documented = specOp.statusCodes().contains(status);
+            result.add(new Suggestion(
+                specOp.method(), specOp.path(), "status",
+                String.valueOf(status),
+                documented
+                    ? "Documented status was not observed by recorded tests."
+                    : "Common negative status is not documented or observed."));
+        }
+        for (final OpenApiSpecParser.ParameterSpec param : specOp.parameters()) {
+            if ("path".equals(param.in())) {
+                continue;
+            }
+            if ("body".equals(param.in())) {
+                continue;
+            }
+            final String label = param.in() + " " + param.name();
+            if (config.suggestMissingRequiredParameter() && param.required()
+                    && hasCalls && seenParams.contains(param.name())) {
+                result.add(new Suggestion(
+                    specOp.method(), specOp.path(), "missing-required-parameter",
+                    label,
+                    "Required parameter was sent in recorded tests; add a negative test omitting it."));
+            }
+            if (config.suggestEmptyParameter()
+                    && seenNonEmptyParams.contains(param.name())) {
+                result.add(new Suggestion(
+                    specOp.method(), specOp.path(), "empty-parameter", label,
+                    "Parameter was sent with a non-empty value; add a negative test with an empty value."));
+            }
+            if (config.suggestBlankParameter()
+                    && seenNonEmptyParams.contains(param.name())) {
+                result.add(new Suggestion(
+                    specOp.method(), specOp.path(), "blank-parameter", label,
+                    "Parameter was sent with a non-empty value; add a negative test with a blank value."));
+            }
+        }
+        if (config.suggestInvalidMediaType() && specOp.hasDeclaredRequestBody()
+                && !seenMediaTypes.isEmpty()) {
+            result.add(new Suggestion(
+                specOp.method(), specOp.path(), "invalid-media-type",
+                "unsupported",
+                "Request body media types were exercised; add a negative test with an unsupported Content-Type."));
+        }
+        return result;
     }
 
     private List<OpenApiSpecParser.ApiOperation> findMatchingSpecOps(
@@ -409,10 +501,26 @@ public final class CoverageComparator {
     }
 
     static String pathToRegex(final String path) {
-        final String escaped = path
-            .replaceAll("\\{([^}]+)}", "[^/]+")
-            .replace("/", "\\/");
-        return "^" + escaped + "$";
+        final StringBuilder regex = new StringBuilder("^");
+        int index = 0;
+        while (index < path.length()) {
+            final int open = path.indexOf('{', index);
+            if (open < 0) {
+                regex.append(Pattern.quote(path.substring(index)));
+                break;
+            }
+            if (open > index) {
+                regex.append(Pattern.quote(path.substring(index, open)));
+            }
+            final int close = path.indexOf('}', open);
+            if (close < 0) {
+                regex.append(Pattern.quote(path.substring(open)));
+                break;
+            }
+            regex.append("[^/]+");
+            index = close + 1;
+        }
+        return regex.append("$").toString();
     }
 
     private static Map<String, List<PatternEntry>> buildPatterns(
@@ -509,7 +617,13 @@ public final class CoverageComparator {
         return result;
     }
 
-    // ----- Data model -----
+    private static String joinInts(final List<Integer> values) {
+        return values.stream()
+            .map(String::valueOf)
+            .collect(Collectors.joining(","));
+    }
+
+    // ----- Result records -----
 
     /**
      * A recorded HTTP operation from coverage output.
@@ -598,6 +712,18 @@ public final class CoverageComparator {
     }
 
     /**
+     * Advisory test gap suggestion. Suggestions never affect coverage
+     * percentages; they are a separate planning signal.
+     */
+    public record Suggestion(
+            String method,
+            String path,
+            String type,
+            String value,
+            String reason) {
+    }
+
+    /**
      * Mutable accumulator used while aggregating per-tag statistics.
      */
     private static final class TagAccumulator {
@@ -631,7 +757,8 @@ public final class CoverageComparator {
             Map<String, TagSummary> tagSummaries,
             int undeclaredOpsCount,
             int deprecatedOpsCount,
-            List<RecordedOperation> unmatchedRecordedOps) {
+            List<RecordedOperation> unmatchedRecordedOps,
+            List<Suggestion> suggestions) {
 
         public int totalOperations() {
             return operations.size();

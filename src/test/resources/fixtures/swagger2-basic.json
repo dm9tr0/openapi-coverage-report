@@ -1,0 +1,39 @@
+{
+  "swagger": "2.0",
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "paths": {
+    "/items/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "type": "string" }
+      ],
+      "post": {
+        "tags": ["Items"],
+        "parameters": [
+          { "$ref": "#/parameters/ItemBody" }
+        ],
+        "responses": {
+          "201": { "$ref": "#/responses/Created" },
+          "400": { "description": "Bad request" }
+        }
+      }
+    }
+  },
+  "parameters": {
+    "ItemBody": {
+      "name": "item",
+      "in": "body",
+      "required": true,
+      "schema": { "$ref": "#/definitions/Item" }
+    }
+  },
+  "responses": {
+    "Created": {
+      "description": "Created",
+      "schema": { "$ref": "#/definitions/Item" }
+    }
+  },
+  "definitions": {
+    "Item": { "type": "object" }
+  }
+}

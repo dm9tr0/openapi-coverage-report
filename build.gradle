@@ -1,5 +1,6 @@
 plugins {
     id 'java-library'
+    id 'application'
     id 'com.vanniktech.maven.publish' version '0.36.0'
 }
 
@@ -23,9 +24,9 @@ ext {
     restAssured = '5.5.7'
 }
 
-// Classpath for the standalone `coverageReport` task only. Carries an SLF4J
-// binding (slf4j-simple) so the CLI prints logs — WITHOUT making that binding a
-// dependency of the published library. Consumers bring their own binding.
+// Classpath for local CLI/report executions. Carries an SLF4J binding
+// (slf4j-simple) so terminal commands print logs — WITHOUT making that binding
+// a dependency of the published library. Consumers bring their own binding.
 configurations {
     reportConsole { extendsFrom configurations.runtimeClasspath }
 }
@@ -57,6 +58,33 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+application {
+    applicationName = 'openapi-coverage'
+    mainClass = 'coverage.OpenApiCoverageReporter'
+}
+
+tasks.named('run', JavaExec) {
+    // Keep terminal CLI output useful without publishing an SLF4J binding.
+    classpath = configurations.reportConsole + sourceSets.main.output
+}
+
+tasks.named('startScripts', CreateStartScripts) {
+    // Generated CLI scripts must point at the installed jar, not build/classes.
+    classpath = files(tasks.named('jar')) + configurations.reportConsole
+}
+
+distributions {
+    main {
+        distributionBaseName = 'openapi-coverage'
+        contents {
+            duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+            from(configurations.reportConsole) {
+                into 'lib'
+            }
+        }
+    }
 }
 
 /*

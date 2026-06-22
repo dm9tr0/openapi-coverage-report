@@ -31,34 +31,62 @@ public final class OpenApiCoverageReporter {
     /**
      * Entry point for the report generator when invoked via JavaExec.
      *
-     * <p>Positional: {@code <specUrl> <fallbackSpecPath> <coverageOutputDir>
-     * [outputDir]}. Optional flags (anywhere): {@code --min-coverage <N>}
-     * (exit code 2 if coverage % is below N), {@code --config <path>} (a flat
-     * {@code key = value} config, see {@link CoverageConfig}).
+     * <p>Named: {@code --spec <specUrlOrFile> --input <coverageOutputDir>}.
+     * Optional flags (anywhere): {@code --fallback <path>},
+     * {@code --output <dir>}, {@code --min-coverage <N>} (exit code 2 if
+     * coverage % is below N), {@code --config <path>} (a flat
+     * {@code key = value} config, see {@link CoverageConfig}). The legacy
+     * positional form remains supported:
+     * {@code <specUrl> <fallbackSpecPath> <coverageOutputDir> [outputDir]}.
      *
      * @param args positional arguments plus optional flags
      */
     public static void main(final String[] args) {
+        if (List.of(args).contains("--help")) {
+            printUsage();
+            return;
+        }
         final List<String> positional = new ArrayList<>();
+        String specUrl = null;
+        String fallbackSpecPath = null;
+        String coverageOutputDir = null;
+        String outputDir = null;
         double minCoverage = -1;
         String configPath = null;
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
-                case "--min-coverage" -> minCoverage = parseMinCoverage(args, ++i);
-                case "--config" -> configPath = i + 1 < args.length ? args[++i] : null;
+                case "--spec" -> specUrl = requireValue(args, ++i, "--spec");
+                case "--fallback" ->
+                    fallbackSpecPath = requireValue(args, ++i, "--fallback");
+                case "--input", "--coverage-dir" ->
+                    coverageOutputDir = requireValue(args, ++i, args[i - 1]);
+                case "--output", "--output-dir" ->
+                    outputDir = requireValue(args, ++i, args[i - 1]);
+                case "--min-coverage" ->
+                    minCoverage = parseMinCoverage(args, ++i);
+                case "--config" -> configPath = requireValue(args, ++i, "--config");
                 default -> positional.add(args[i]);
             }
         }
-        if (positional.size() < 3) {
-            System.err.println("Usage: OpenApiCoverageReporter <specUrl>"
-                + " <fallbackSpecPath> <coverageOutputDir> [outputDir]"
-                + " [--min-coverage <N>] [--config <path>]");
+        if (specUrl == null && positional.size() >= 1) {
+            specUrl = positional.get(0);
+        }
+        if (fallbackSpecPath == null && positional.size() >= 2) {
+            fallbackSpecPath = positional.get(1);
+        }
+        if (coverageOutputDir == null && positional.size() >= 3) {
+            coverageOutputDir = positional.get(2);
+        }
+        if (outputDir == null) {
+            outputDir = positional.size() > 3 ? positional.get(3) : "build/reports";
+        }
+        if (specUrl == null || coverageOutputDir == null) {
+            printUsage();
             System.exit(1);
         }
-        final String outputDir = positional.size() > 3
-            ? positional.get(3) : "build/reports";
         final boolean ok = new OpenApiCoverageReporter(
-            positional.get(0), positional.get(1), positional.get(2),
+            specUrl, fallbackSpecPath == null ? "" : fallbackSpecPath,
+            coverageOutputDir,
             outputDir, minCoverage, configPath
         ).run();
         if (!ok) {
@@ -68,6 +96,8 @@ public final class OpenApiCoverageReporter {
 
     private static double parseMinCoverage(final String[] args, final int idx) {
         if (idx >= args.length) {
+            System.err.println("Missing value for --min-coverage");
+            System.exit(1);
             return -1;
         }
         try {
@@ -77,6 +107,26 @@ public final class OpenApiCoverageReporter {
             System.exit(1);
             return -1;
         }
+    }
+
+    private static String requireValue(final String[] args, final int idx,
+            final String flag) {
+        if (idx >= args.length || args[idx].startsWith("--")) {
+            System.err.println("Missing value for " + flag);
+            System.exit(1);
+            return "";
+        }
+        return args[idx];
+    }
+
+    private static void printUsage() {
+        System.err.println("Usage: openapi-coverage "
+            + "--spec <specUrlOrFile> --input <coverageOutputDir> "
+            + "[--fallback <fallbackSpecPath>] [--output <outputDir>] "
+            + "[--min-coverage <N>] [--config <path>]");
+        System.err.println("   or: openapi-coverage <specUrlOrFile> "
+            + "<fallbackSpecPath> <coverageOutputDir> [outputDir] "
+            + "[--min-coverage <N>] [--config <path>]");
     }
 
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
@@ -141,7 +191,9 @@ public final class OpenApiCoverageReporter {
     public boolean run() {
         log.info("=== OpenAPI Coverage Report ===");
         log.info("Spec URL: {}", specUrl);
-        log.info("Fallback: {}", fallbackSpecPath);
+        if (fallbackSpecPath != null && !fallbackSpecPath.isBlank()) {
+            log.info("Fallback: {}", fallbackSpecPath);
+        }
         log.info("Coverage: {}", coverageOutputDir);
         log.info("Output:   {}", outputDir);
 
@@ -180,13 +232,16 @@ public final class OpenApiCoverageReporter {
         // Step 5: Generate HTML + JSON reports
         final String specSource = deriveSpecSource();
         new HtmlReportGenerator(
-            result, parsedSpec.version(), specSource, recordedOps.size())
+            result, parsedSpec.version(), specSource, recordedOps.size(),
+            config.htmlReportName())
             .generate(outputDir);
         new JsonReportGenerator(
-            result, parsedSpec.version(), specSource, recordedOps.size())
+            result, parsedSpec.version(), specSource, recordedOps.size(),
+            config.jsonReportName())
             .generate(outputDir);
 
         log.info("=== Coverage Report Complete ===");
+        printRunSummary(result, config);
 
         // Step 6: Enforce optional coverage threshold (CI gate)
         if (minCoverage >= 0 && result.totalCoveredPercent() < minCoverage) {
@@ -196,6 +251,28 @@ public final class OpenApiCoverageReporter {
             return false;
         }
         return true;
+    }
+
+    private void printRunSummary(final CoverageComparator.DetailedCoverageResult result,
+            final CoverageConfig config) {
+        final String percent = String.format("%.1f", result.totalCoveredPercent());
+        final StringBuilder summary = new StringBuilder()
+            .append("Coverage: ").append(result.coveredConditions())
+            .append("/").append(result.totalConditions())
+            .append(" conditions covered (").append(percent).append("%)")
+            .append(System.lineSeparator())
+            .append("HTML report: ")
+            .append(Path.of(outputDir, config.htmlReportName()).toAbsolutePath())
+            .append(System.lineSeparator())
+            .append("JSON report: ")
+            .append(Path.of(outputDir, config.jsonReportName()).toAbsolutePath())
+            .append(System.lineSeparator());
+        if (result.suggestions().size() > 0) {
+            summary.append("Suggested test gaps: ")
+                .append(result.suggestions().size())
+                .append(System.lineSeparator());
+        }
+        System.out.print(summary);
     }
 
     /**
@@ -211,6 +288,11 @@ public final class OpenApiCoverageReporter {
             return primary;
         }
 
+        if (fallbackSpecPath == null || fallbackSpecPath.isBlank()) {
+            log.error("Could not load spec from {} and no fallback was set.",
+                specUrl);
+            return null;
+        }
         log.warn("Could not load spec from {}, falling back to: {}",
             specUrl, fallbackSpecPath);
         final String fallback = readFile(fallbackSpecPath);

@@ -1,0 +1,42 @@
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/resources/{id}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/TraceId" }
+      ],
+      "get": {
+        "tags": ["Resources"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Verbose" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/Resource" },
+          "404": { "description": "Not found" }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "TraceId": {
+        "name": "X-Trace-Id",
+        "in": "header",
+        "required": false
+      },
+      "Verbose": {
+        "name": "verbose",
+        "in": "query",
+        "required": false
+      }
+    },
+    "responses": {
+      "Resource": {
+        "description": "OK",
+        "content": {
+          "application/json": { "schema": { "type": "object" } }
+        }
+      }
+    }
+  }
+}

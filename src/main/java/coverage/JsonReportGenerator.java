@@ -7,6 +7,7 @@ import coverage.CoverageComparator.ConditionResult;
 import coverage.CoverageComparator.ConditionTypeSummary;
 import coverage.CoverageComparator.DetailedCoverageResult;
 import coverage.CoverageComparator.OperationDetail;
+import coverage.CoverageComparator.Suggestion;
 import coverage.CoverageComparator.TagSummary;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -31,6 +32,7 @@ public final class JsonReportGenerator {
     private final String specVersion;
     private final String specSource;
     private final int recordedOperations;
+    private final String reportName;
 
     /**
      * @param result             the analysed coverage result
@@ -43,10 +45,28 @@ public final class JsonReportGenerator {
             final String specVersion,
             final String specSource,
             final int recordedOperations) {
+        this(result, specVersion, specSource, recordedOperations,
+            "coverage-report.json");
+    }
+
+    /**
+     * @param result             the analysed coverage result
+     * @param specVersion        OpenAPI version of the parsed spec
+     * @param specSource         where the spec came from (URL or fallback)
+     * @param recordedOperations number of recorded operations parsed
+     * @param reportName         output JSON filename
+     */
+    public JsonReportGenerator(
+            final DetailedCoverageResult result,
+            final String specVersion,
+            final String specSource,
+            final int recordedOperations,
+            final String reportName) {
         this.result = result;
         this.specVersion = specVersion;
         this.specSource = specSource;
         this.recordedOperations = recordedOperations;
+        this.reportName = reportName;
     }
 
     /**
@@ -76,14 +96,16 @@ public final class JsonReportGenerator {
         summary.put("undeclaredOpsCount", result.undeclaredOpsCount());
         summary.put("deprecatedOpsCount", result.deprecatedOpsCount());
         summary.put("unmatchedRecordedCount", result.unmatchedRecordedOps().size());
+        summary.put("suggestionsCount", result.suggestions().size());
 
         writeConditionTypes(root.putObject("conditionTypes"),
             result.conditionTypes());
         writeTags(root.putObject("tags"), result.tagSummaries());
         writeOperations(root.putArray("operations"));
         writeUnmatched(root.putArray("unmatchedRequests"));
+        writeSuggestions(root.putArray("suggestions"));
 
-        final Path outputFile = Path.of(outputDir, "coverage-report.json");
+        final Path outputFile = Path.of(outputDir, reportName);
         try {
             Files.createDirectories(outputFile.getParent());
             Files.writeString(outputFile,
@@ -156,6 +178,17 @@ public final class JsonReportGenerator {
             n.put("method", op.method());
             n.put("path", op.originalPath());
             n.put("statusCode", op.statusCode());
+        }
+    }
+
+    private void writeSuggestions(final ArrayNode suggestionsArray) {
+        for (final Suggestion suggestion : result.suggestions()) {
+            final ObjectNode n = suggestionsArray.addObject();
+            n.put("method", suggestion.method());
+            n.put("path", suggestion.path());
+            n.put("type", suggestion.type());
+            n.put("value", suggestion.value());
+            n.put("reason", suggestion.reason());
         }
     }
 
